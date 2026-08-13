@@ -46,19 +46,27 @@ const char* WIFI_SSID     = "Wokwi-GUEST";   // Wokwi's built-in internet-connec
 const char* WIFI_PASSWORD = "";
 const char* MQTT_BROKER   = "broker.hivemq.com";
 const int   MQTT_PORT     = 1883;
-const char* MQTT_TOPIC    = "ioe-lab/fall-detection/team41/alert";
+const char* MQTT_TOPIC_ALERT = "ioe-lab/fall-detection/team41/alert";
+const char* MQTT_TOPIC_DATA  = "ioe-lab/fall-detection/team41/sensor_data";
 const char* DEVICE_ID     = "wearable-01";
 
 WiFiClient   espClient;
 PubSubClient mqtt(espClient);
+
+// ---------------- Sensor Buffer (ML Integration) ----------------
+const int WINDOW_SIZE = 30; // 3 seconds at 10Hz
+float window_ax[WINDOW_SIZE];
+float window_ay[WINDOW_SIZE];
+float window_az[WINDOW_SIZE];
+int buffer_idx = 0;
 
 // ---------------- Sensor ----------------
 Adafruit_MPU6050 mpu;
 
 // ---------------- Fall Detection Tuning ----------------
 const float FREE_FALL_G   = 0.4;              // below this  -> possible free fall
-const float IMPACT_G      = 2.2;              // above this  -> impact
-const unsigned long FALL_WINDOW_MS    = 1000;  // must see impact within this time
+const float IMPACT_G      = 1.8;              // above this  -> impact (lowered from 2.2 to 1.8 for Wokwi 2g slider limit)
+const unsigned long FALL_WINDOW_MS    = 4000;  // 4 seconds (increased for easier manual testing in Wokwi)
 const unsigned long CONFIRM_WINDOW_MS = 8000;  // grace period to cancel a false alarm
 
 enum State { NORMAL, FREE_FALL, IMPACT_PENDING_CONFIRM, ALERT_ACTIVE };
@@ -90,6 +98,7 @@ void setup() {
 
   connectWiFi();
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  mqtt.setBufferSize(1024); // Increase buffer size for large JSON arrays
   connectMQTT();
 
   Serial.println("System armed. Monitoring for falls...\n");
@@ -108,6 +117,12 @@ void loop() {
   float ay = a.acceleration.y / 9.81;
   float az = a.acceleration.z / 9.81;
   float magnitude = sqrt(ax * ax + ay * ay + az * az);
+
+  // Store in circular buffer
+  window_ax[buffer_idx] = ax;
+  window_ay[buffer_idx] = ay;
+  window_az[buffer_idx] = az;
+  buffer_idx = (buffer_idx + 1) % WINDOW_SIZE;
 
   bool sosPressed = (digitalRead(SOS_BUTTON_PIN) == LOW);
 
@@ -133,6 +148,8 @@ void loop() {
         Serial.println("[STATE] Impact detected right after free-fall -> possible fall!");
         state = IMPACT_PENDING_CONFIRM;
         alertPendingTime = millis();
+        // Tier 2 ML: Stream the buffered window to the cloud for confirmation
+        publishWindowData();
       } else if (millis() - freeFallTime > FALL_WINDOW_MS) {
         state = NORMAL; // no impact followed -> false alarm, ignore
       }
@@ -209,9 +226,29 @@ void publishAlert(const char* reason) {
   String payload = String("{\"device\":\"") + DEVICE_ID +
                     "\",\"event\":\"FALL_ALERT\",\"reason\":\"" + reason +
                     "\",\"timestamp\":" + String(millis()) + "}";
-  mqtt.publish(MQTT_TOPIC, payload.c_str());
+  mqtt.publish(MQTT_TOPIC_ALERT, payload.c_str());
   Serial.print("[MQTT] Published to ");
-  Serial.print(MQTT_TOPIC);
+  Serial.print(MQTT_TOPIC_ALERT);
   Serial.print(": ");
   Serial.println(payload);
+}
+
+void publishWindowData() {
+  if (!mqtt.connected()) connectMQTT();
+  Serial.println("[MQTT] Publishing sensor window to ML service...");
+  
+  // Construct JSON array string manually to save memory
+  String payload = "{\"device\":\"" + String(DEVICE_ID) + "\",\"window\":[";
+  for (int i = 0; i < WINDOW_SIZE; i++) {
+    // Read from oldest to newest in circular buffer
+    int idx = (buffer_idx + i) % WINDOW_SIZE;
+    payload += "[" + String(window_ax[idx], 2) + "," + 
+                     String(window_ay[idx], 2) + "," + 
+                     String(window_az[idx], 2) + "]";
+    if (i < WINDOW_SIZE - 1) payload += ",";
+  }
+  payload += "]}";
+  
+  mqtt.publish(MQTT_TOPIC_DATA, payload.c_str());
+  Serial.println("[MQTT] Window data sent.");
 }
