@@ -1,0 +1,5 @@
+{
+    "sketch": "FallDetection.ino",
+    "board": "esp32:esp32:esp32doit-devkit-v1",
+    "output": "build"
+}

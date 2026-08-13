@@ -1,0 +1,13 @@
+.claude/
+
+# Arduino build artifacts
+build/
+*.bin
+*.elf
+*.hex
+
+# VS Code specific local settings
+.vscode/build/
+.vscode/arduino-helper.json
+.vscode/.last-used
+.vscode/c_cpp_properties.json

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "author": "IoE Lab Mini Project - Fall Detection Team",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-mpu6050", "id": "imu1", "top": -160, "left": 260, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "buzzer1", "top": 160, "left": 260, "attrs": { "volume": "0.1" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 320, "left": -20, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": -160, "left": -160, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led_red", "top": -160, "left": -260, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 0, "left": -160, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led_green", "top": 0, "left": -260, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+
+    [ "esp:3V3", "imu1:VCC", "red", [ "v-40", "h180" ] ],
+    [ "imu1:GND", "esp:GND.1", "black", [ "v40", "h-180" ] ],
+    [ "esp:D21", "imu1:SDA", "green", [ "v-20", "h190" ] ],
+    [ "esp:D22", "imu1:SCL", "gold", [ "v-10", "h195" ] ],
+
+    [ "esp:D25", "buzzer1:2", "orange", [ "v40", "h180" ] ],
+    [ "buzzer1:1", "esp:GND.1", "black", [ "v20", "h-260" ] ],
+
+    [ "esp:D4", "btn1:1.l", "orange", [ "v60", "h0" ] ],
+    [ "btn1:2.l", "esp:GND.1", "black", [ "v-40", "h-40" ] ],
+
+    [ "esp:D27", "r1:1", "orange", [ "v-40", "h-60" ] ],
+    [ "r1:2", "led_red:A", "orange", [] ],
+    [ "led_red:C", "esp:GND.1", "black", [ "v60", "h420" ] ],
+
+    [ "esp:D26", "r2:1", "orange", [ "v0", "h-60" ] ],
+    [ "r2:2", "led_green:A", "orange", [] ],
+    [ "led_green:C", "esp:GND.1", "black", [ "v80", "h420" ] ]
+  ]
+}
