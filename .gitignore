@@ -1,4 +1,12 @@
 .claude/
+.venv/
+ml/tests/__pycache__/
+
+# Local SisFall source data and generated ML outputs
+SisFall_dataset/
+ml/artifacts/
+ml/fall_detection_model.joblib
+ml/__pycache__/
 
 # Arduino build artifacts
 build/
