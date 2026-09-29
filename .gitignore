@@ -19,3 +19,5 @@ build/
 .vscode/arduino-helper.json
 .vscode/.last-used
 .vscode/c_cpp_properties.json
+
+node_modules/

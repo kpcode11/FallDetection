@@ -4,6 +4,8 @@ This repository contains the prototype firmware and simulation environment for a
 
 It is fully configured to run inside **Visual Studio Code** using the **Wokwi Simulator**.
 
+For complete Windows, WSL, dashboard, ML, SisFall, MQTT, and agent handoff instructions, see [SETUP.md](SETUP.md).
+
 ---
 
 ## 🛠 Features & Algorithm
