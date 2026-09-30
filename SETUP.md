@@ -54,7 +54,7 @@ Open Ubuntu and install the Linux toolchain:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y nodejs npm python3-venv build-essential unzip
+sudo apt-get install -y nodejs npm python3-venv build-essential unzip curl
 ```
 
 Check the tools:
@@ -64,6 +64,30 @@ python3 --version
 node --version
 npm --version
 ```
+
+### Proven Arduino CLI setup in WSL (works for this project)
+
+The VS Code Arduino extension can fail or misconfigure the board path on some machines. The working alternative used for this project is to install and use the Arduino CLI directly inside WSL.
+
+```bash
+# from Ubuntu in WSL
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+arduino-cli version
+arduino-cli core update-index
+arduino-cli core install esp32:esp32
+arduino-cli lib install 'PubSubClient'
+arduino-cli lib install 'Adafruit MPU6050'
+```
+
+The project uses these exact libraries and the board FQBN:
+
+```text
+Board: esp32:esp32:esp32doit-devkit-v1
+Libraries: PubSubClient, Adafruit MPU6050
+```
+
+This path is reliable when the VS Code Arduino extension is broken, stale, or unable to resolve the board configuration.
 
 ## Open the Existing Repository in WSL
 
@@ -249,15 +273,32 @@ Use three processes:
 
 ### Firmware compilation and Wokwi
 
-In VS Code on Windows:
+This repository is configured for the Wokwi build artifacts to be generated in the repo root `build/` directory. The exact working command used for this project is:
 
-1. Open `FallDetection.ino`.
-2. Verify/compile with the Arduino extension.
-3. Confirm that `build/FallDetection.ino.bin` exists.
-4. Run `Wokwi: Start Simulator`.
-5. Open the Serial Monitor.
+```bash
+cd /mnt/c/Users/KESHAV/Documents/IOEProject/FallDetection
+mkdir -p build
+arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 --build-path build FallDetection.ino
+ls -l build
+```
+
+Verify that the build directory contains the generated binaries, including:
+
+```text
+build/FallDetection.ino.bin
+build/FallDetection.ino.elf
+```
+
+Then in VS Code on Windows:
+
+1. Open `FallDetection.ino` if needed.
+2. Start Wokwi using `Wokwi: Start Simulator`.
+3. Confirm the simulator loads the binaries defined in `wokwi.toml`.
+4. Open the Serial Monitor.
 
 The Wokwi firmware uses `Wokwi-GUEST` Wi-Fi and publishes to the public HiveMQ broker. In the simulator, move the MPU6050 acceleration controls to create a low-magnitude free-fall followed by an impact, or press the red SOS button.
+
+> If the Arduino extension is still failing, keep the Arduino CLI path above as the canonical setup. It is the proven, working route for this repo and the one we used to complete the installation and firmware compile path.
 
 The firmware pin mapping is:
 

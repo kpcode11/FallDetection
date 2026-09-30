@@ -35,21 +35,51 @@ Upon detecting a fall, the device enters an 8-second grace period. The buzzer so
 
 ## ⚙️ Prerequisites & Setup
 
-To run this simulation on your PC, you need to set up the VS Code Arduino environment.
+This project was successfully validated using a **WSL2 Ubuntu environment** for the ML and dashboard work, and the **Arduino CLI in WSL** as the reliable alternative when the VS Code Arduino extension was failing or misconfigured.
 
 ### 1. Install Required Software
 1. Download and install [Visual Studio Code](https://code.visualstudio.com/).
-2. In VS Code, install the following extensions:
-   - **Arduino** (by Microsoft)
+2. Install the following VS Code extensions:
+   - **Arduino** (by Microsoft) — optional if using the CLI path below
    - **Wokwi Simulator** (by Wokwi)
+3. Install **WSL2** with an Ubuntu distribution and enable the Windows Linux subsystem.
 
-### 2. Install Arduino Libraries
-The project requires three specific libraries to compile.
-1. Open the VS Code Command Palette (`Ctrl+Shift+P`).
-2. Search for and open **`Arduino: Library Manager`**.
-3. Install the following libraries:
-   - **`Adafruit MPU6050`** *(Note: If prompted, click "Install All" to also install its dependencies like `Adafruit Unified Sensor` and `Adafruit BusIO`)*
-   - **`PubSubClient`** (by Nick O'Leary)
+### 2. Use the Proven WSL + Arduino CLI Setup
+The reliable setup path that worked for this repo is:
+
+```bash
+# in WSL Ubuntu
+sudo apt-get update
+sudo apt-get install -y curl unzip python3-pip build-essential
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+arduino-cli version
+arduino-cli core update-index
+arduino-cli core install esp32:esp32
+arduino-cli lib install 'PubSubClient'
+arduino-cli lib install 'Adafruit MPU6050'
+```
+
+This installs the ESP32 board package and the required firmware libraries without relying on the Arduino VS Code extension. The project is configured for the `esp32:esp32:esp32doit-devkit-v1` FQBN.
+
+### 3. Compile the Firmware for Wokwi
+From the repo root in WSL:
+
+```bash
+cd /mnt/c/Users/KESHAV/Documents/IOEProject/FallDetection
+mkdir -p build
+arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 --build-path build FallDetection.ino
+ls -l build
+```
+
+The expected output contains the generated firmware files such as:
+
+```text
+build/FallDetection.ino.bin
+build/FallDetection.ino.elf
+```
+
+This matches the output path expected by `wokwi.toml`.
 
 ---
 
