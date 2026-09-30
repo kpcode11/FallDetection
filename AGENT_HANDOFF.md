@@ -68,6 +68,76 @@ The project uses:
 - green LED
 - breadboard + jumper wires
 
+### Beginner shopping list
+
+Buy these parts for the first breadboard demonstration:
+
+| Item | Quantity | Recommendation |
+| --- | ---: | --- |
+| ESP32 DevKit V1 | 1 | Choose a board with USB and pre-soldered header pins if possible |
+| MPU6050 breakout module | 1 | Prefer a module with clearly labelled `VCC`, `GND`, `SDA`, and `SCL` pins |
+| Full-size solderless breadboard | 1 | 830-point board is easiest for a beginner |
+| Active 3.3 V buzzer module | 1 | Use a low-current module; do not buy a high-power siren |
+| Momentary push button | 1 | 6 mm tactile button is suitable |
+| Red 5 mm LED | 1 | Fall-alert indicator |
+| Green 5 mm LED | 1 | System-status indicator |
+| 220 ohm resistors | 2 | One for each LED; buy a 10-pack or resistor assortment |
+| 330 ohm resistors | 2 optional | Safe alternatives if 220 ohm is unavailable |
+| Male-to-male Dupont jumper wires | 1 bundle | Buy at least 40 wires, preferably 65 or 120 assorted pieces |
+| Male-to-female Dupont wires | 1 small bundle | Buy 10-20 in case the sensor or buzzer has female sockets |
+| Female-to-female Dupont wires | 1 small bundle | Optional, useful for modules with male pins |
+| USB data cable | 1 | Match the ESP32 connector: micro-USB or USB-C; ensure it supports data |
+| USB power bank | 1 optional | Easiest safe battery-style power source for a later demo |
+
+Buy one spare ESP32, MPU6050, button, and buzzer only if the budget allows. LEDs and resistors are inexpensive, so buying an assortment avoids delays.
+
+Do not buy a bare lithium cell for the first build. A USB power bank is safer and simpler for the later standalone demonstration.
+
+### Breadboard wiring procedure
+
+Power off and disconnect the USB cable while wiring. The ESP32 uses 3.3 V logic.
+
+1. Place the ESP32 across the center gap of the breadboard so the two pin rows are on opposite sides.
+2. Connect ESP32 `GND` to the breadboard ground rail.
+3. Connect the MPU6050 `VCC` to ESP32 `3V3`, not `5V`.
+4. Connect MPU6050 `GND` to the ground rail.
+5. Connect MPU6050 `SDA` to ESP32 `GPIO21`.
+6. Connect MPU6050 `SCL` to ESP32 `GPIO22`.
+7. Connect the buzzer negative pin to ground and its signal/positive pin to `GPIO25`. Use only a low-current 3.3 V buzzer module. If the buzzer is marked `S`, connect `S` to GPIO25, `+` to 3.3 V, and `-` to GND; follow the module label.
+8. Place the push button across the breadboard center gap. Connect one side to `GPIO4` and the opposite side to ground. The firmware already enables `INPUT_PULLUP`, so no external button resistor is required.
+9. For the red LED, connect `GPIO27` to a 220 ohm resistor, the resistor to the LED long leg/anode, and the LED short leg/cathode to ground.
+10. For the green LED, connect `GPIO26` to a second 220 ohm resistor, the resistor to the LED long leg/anode, and the LED short leg/cathode to ground.
+
+The final wiring table is:
+
+| ESP32 pin | Connect to |
+| --- | --- |
+| `3V3` | MPU6050 `VCC` |
+| `GND` | MPU6050 `GND`, buzzer `-`, button side, both LED cathodes |
+| `GPIO21` | MPU6050 `SDA` |
+| `GPIO22` | MPU6050 `SCL` |
+| `GPIO25` | buzzer signal/input |
+| `GPIO4` | push-button side; other button side goes to GND |
+| `GPIO27` | 220 ohm resistor, then red LED anode |
+| `GPIO26` | 220 ohm resistor, then green LED anode |
+
+### First hardware test
+
+1. Leave the sensor and LEDs visible on the breadboard.
+2. Connect the ESP32 to the laptop with the USB data cable.
+3. Upload or otherwise run the compiled firmware using the Arduino environment you choose.
+4. Open Serial Monitor at `115200` baud.
+5. Confirm `MPU6050 ready.` and Wi-Fi/MQTT connection messages.
+6. Press the button briefly. This should produce a manual SOS alert.
+7. Confirm the red LED and buzzer behavior.
+8. Test motion only after the basic button test works.
+
+### Later battery operation
+
+For the first battery-style demonstration, use a USB power bank connected through the ESP32 USB port. This avoids exposing the board to an unknown lithium-cell voltage.
+
+Never connect a raw 3.7 V lithium battery directly to the ESP32 `3V3` pin. A raw cell needs a suitable charger, protection circuit, switch, and regulated power converter. If using a battery module later, use a regulated 5 V output into the ESP32 USB/`VIN` input and verify its polarity before connecting it.
+
 ---
 
 ## 4. Verified working environment
