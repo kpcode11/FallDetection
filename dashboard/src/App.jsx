@@ -3,7 +3,7 @@ import mqtt from 'mqtt';
 import { Activity, AlertTriangle, ShieldCheck, Database, Server } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const MQTT_BROKER = "wss://broker.hivemq.com:8000/mqtt";
+const MQTT_BROKER = "wss://broker.hivemq.com:8884/mqtt";
 const TOPIC_ALERT = "ioe-lab/fall-detection/team41/alert";
 const TOPIC_DATA = "ioe-lab/fall-detection/team41/sensor_data";
 

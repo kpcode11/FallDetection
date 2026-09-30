@@ -259,7 +259,7 @@ cd /mnt/c/Users/KESHAV/Documents/IOEProject/FallDetection/dashboard
 npm run dev -- --host 0.0.0.0
 ```
 
-Open `http://localhost:5173/` in a Windows browser. The dashboard connects to HiveMQ over WebSockets at `wss://broker.hivemq.com:8000/mqtt`, subscribes to the sensor and alert topics, graphs the latest 30-sample window, and displays the latest alerts.
+Open `http://localhost:5173/` in a Windows browser. The dashboard connects to HiveMQ over secure WebSockets at `wss://broker.hivemq.com:8884/mqtt`, subscribes to the sensor and alert topics, graphs the latest 30-sample window, and displays the latest alerts. Wait until the top-right status says `Connected to HiveMQ` before triggering a test event.
 
 The dashboard can run without the ML service, but it will not display ML alerts until a producer publishes data or an alert to the shared broker.
 
@@ -361,6 +361,19 @@ Compile `FallDetection.ino` first. Wokwi reads the paths configured in `wokwi.to
 ### Dashboard shows no data
 
 Check that the browser can reach HiveMQ over WebSockets, that the firmware or MQTT test publisher is active, and that all processes use the exact topic names documented above. The dashboard does not invent sensor data on its own.
+
+### Live feed works but Confirmed Alerts is empty
+
+The dashboard uses two separate MQTT topics:
+
+```text
+ioe-lab/fall-detection/team41/sensor_data
+ioe-lab/fall-detection/team41/alert
+```
+
+If the live graph updates but the alert panel still says `System is monitoring. No falls detected.`, the dashboard connection is working and no new alert has arrived yet. Press the Wokwi SOS button after the dashboard shows `Connected to HiveMQ`, or complete the free-fall/impact sequence and wait for the 8-second confirmation window.
+
+MQTT messages are not retained by this demo. Alerts published before the dashboard connected will not appear later; trigger the SOS or fall event again after the dashboard is connected.
 
 ## Agent Handoff Checklist
 

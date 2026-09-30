@@ -228,6 +228,14 @@ Open the browser to:
 http://localhost:5173/
 ```
 
+The dashboard browser client connects to HiveMQ over secure WebSockets at:
+
+```text
+wss://broker.hivemq.com:8884/mqtt
+```
+
+Wait for `Connected to HiveMQ` in the dashboard before triggering SOS or simulating a fall.
+
 ### 7.4 Run the ML service
 
 Open a third WSL terminal:
@@ -277,6 +285,8 @@ This creates the sequence the firmware expects.
 ### Method 2: Press the SOS button
 
 The red SOS button triggers a manual alert immediately. This is the fastest demonstration path if you only want to show the alert system working.
+
+For dashboard verification, open the dashboard first and wait for `Connected to HiveMQ`, then press SOS again. The live graph and alert feed use separate MQTT topics, so a working graph does not by itself mean that an alert has been published. Alerts sent before the dashboard connected are not replayed because this demo does not use retained MQTT messages.
 
 ---
 
