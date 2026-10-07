@@ -1,32 +1,33 @@
 /*
   IoE-Based Fall Detection System for Elderly Care
   ---------------------------------------------------
-  Wokwi prototype firmware
+  Real-hardware firmware (ESP32 + MPU6050 clone + buzzer + LEDs + SOS button)
 
-  Hardware simulated:
+  Hardware:
     - ESP32 Dev Kit v1
-    - MPU6050 (accelerometer + gyroscope)  -> I2C (SDA=21, SCL=22)
+    - MPU6050 / MPU6500 (accelerometer + gyroscope) -> I2C (SDA=21, SCL=22)
     - Buzzer                                -> GPIO25
     - SOS pushbutton                        -> GPIO4  (INPUT_PULLUP)
     - Red LED  (fall alert indicator)       -> GPIO27
     - Green LED (system / WiFi OK)          -> GPIO26
 
   Algorithm:
-    A classic two-stage wearable fall-detection approach:
-      1. FREE FALL   - total acceleration magnitude drops below ~0.4 g
-      2. IMPACT      - within a short window, magnitude spikes above ~2.2 g
-    If both stages occur in sequence, the device enters a short grace period
-    (CONFIRM_WINDOW_MS) during which the wearer can cancel a false alarm by
-    pressing the SOS button. If they don't respond, the fall is confirmed and
-    an alert is published over MQTT (simulating the cloud/caregiver dashboard
-    alert described in the project report). The SOS button also works as a
-    manual, instant panic button at any time.
+    1. FREE FALL - total acceleration magnitude drops below ~0.4 g
+    2. IMPACT    - shortly after, magnitude spikes above ~1.8 g
+    If both occur in sequence, the device starts a grace period
+    (CONFIRM_WINDOW_MS) during which the wearer can cancel a false alarm.
+    If they don't respond, the fall is confirmed and an alert is published
+    over MQTT.
 
-  Note on WiFi in Wokwi:
-    Wokwi's ESP32 simulation has real internet access via the "Wokwi-GUEST"
-    open network, so this sketch can genuinely publish to a public MQTT
-    broker (broker.hivemq.com) from inside the simulator - no real hardware
-    needed to test the cloud-alert path end to end.
+  HOW THE SOS BUTTON WORKS (what you hear tells you what to press):
+    Silent, green LED on     : HOLD the button for 1 second -> manual SOS alert
+                               (red LED lights while you hold)
+    FAST BEEPING + red flash : fall suspected, 8 s grace period
+                               -> CLICK once to cancel ("I'm OK")
+    SOLID LOUD TONE          : alert has been sent
+                               -> CLICK once to acknowledge and silence it
+    After any click that cancels/acknowledges, the button is ignored for
+    1.5 seconds so a double tap or contact bounce can never create a new SOS.
 */
 
 #include <Wire.h>
@@ -42,8 +43,10 @@
 #define GREEN_LED_PIN  26
 
 // ---------------- WiFi / MQTT ----------------
-const char* WIFI_SSID     = "Wokwi-GUEST";   // Wokwi's built-in internet-connected network
-const char* WIFI_PASSWORD = "";
+// const char* WIFI_SSID     = "vivo V30 Pro";
+const char* WIFI_SSID     = "Yoyo";   // Wokwi's built-in internet-connected network
+// const char* WIFI_PASSWORD = "Sandhya@2246";
+const char* WIFI_PASSWORD = "Keshav911";
 const char* MQTT_BROKER   = "broker.hivemq.com";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_TOPIC_ALERT = "ioe-lab/fall-detection/team41/alert";
@@ -64,16 +67,35 @@ int buffer_idx = 0;
 Adafruit_MPU6050 mpu;
 
 // ---------------- Fall Detection Tuning ----------------
-const float FREE_FALL_G   = 0.4;              // below this  -> possible free fall
-const float IMPACT_G      = 1.8;              // above this  -> impact (lowered from 2.2 to 1.8 for Wokwi 2g slider limit)
-const unsigned long FALL_WINDOW_MS    = 4000;  // 4 seconds (increased for easier manual testing in Wokwi)
+const float FREE_FALL_G   = 0.4;               // below this  -> possible free fall
+const float IMPACT_G      = 1.8;               // above this  -> impact
+const unsigned long FALL_WINDOW_MS    = 4000;  // max time between free fall and impact
 const unsigned long CONFIRM_WINDOW_MS = 8000;  // grace period to cancel a false alarm
+const unsigned long SAMPLE_INTERVAL_MS = 100;  // sensor sampling: 10 Hz
+
+// ---------------- Button Tuning ----------------
+const unsigned long DEBOUNCE_MS       = 40;    // contact must be stable this long to count
+const unsigned long SOS_HOLD_MS       = 1000;  // hold time for manual SOS (set to 0 for instant SOS)
+const unsigned long BUTTON_LOCKOUT_MS = 1500;  // button ignored this long after cancel/acknowledge/alert
 
 enum State { NORMAL, FREE_FALL, IMPACT_PENDING_CONFIRM, ALERT_ACTIVE };
 State state = NORMAL;
 
-unsigned long freeFallTime    = 0;
+unsigned long freeFallTime     = 0;
 unsigned long alertPendingTime = 0;
+unsigned long lastSampleTime   = 0;
+
+// ---------------- Button state ----------------
+bool btnRaw = false;                  // last raw reading (true = pressed)
+bool btnStable = false;               // debounced state (true = pressed)
+unsigned long btnRawChangedAt = 0;    // when the raw reading last changed
+unsigned long btnPressStart = 0;      // when the current debounced press began
+bool pressEvent = false;              // true for one loop when a new press is confirmed
+bool holdHandled = true;              // this press was already used (or must be ignored)
+unsigned long ignoreButtonUntil = 0;  // button lockout deadline
+
+// ---------------- Buzzer state ----------------
+int buzzerFreq = 0;                   // 0 = off
 
 // ---------------- Setup ----------------
 void setup() {
@@ -85,6 +107,10 @@ void setup() {
   pinMode(RED_LED_PIN, OUTPUT);
   pinMode(GREEN_LED_PIN, OUTPUT);
   pinMode(SOS_BUTTON_PIN, INPUT_PULLUP);
+
+  // Start with the real button state; a press that is already held at boot is ignored.
+  btnRaw = btnStable = (digitalRead(SOS_BUTTON_PIN) == LOW);
+  holdHandled = true;
 
   Wire.begin();
   if (!mpu.begin()) {
@@ -101,94 +127,178 @@ void setup() {
   mqtt.setBufferSize(1024); // Increase buffer size for large JSON arrays
   connectMQTT();
 
-  Serial.println("System armed. Monitoring for falls...\n");
+  Serial.println("System armed. Monitoring for falls...");
+  Serial.println("  Hold SOS 1 s = manual alert | Click = cancel / acknowledge\n");
 }
 
 // ---------------- Main Loop ----------------
+// The loop runs about every 10 ms so button presses are never missed.
+// Sensor sampling still happens at 10 Hz (every SAMPLE_INTERVAL_MS).
 void loop() {
   if (!mqtt.connected()) connectMQTT();
   mqtt.loop();
 
-  sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
+  updateButton();
+  if (pressEvent) {
+    Serial.println("[BUTTON] press detected");
+  }
 
-  // Convert m/s^2 -> g, then take the magnitude of the 3-axis vector
-  float ax = a.acceleration.x / 9.81;
-  float ay = a.acceleration.y / 9.81;
-  float az = a.acceleration.z / 9.81;
-  float magnitude = sqrt(ax * ax + ay * ay + az * az);
+  unsigned long now = millis();
+  bool sampleTick = (now - lastSampleTime >= SAMPLE_INTERVAL_MS);
+  float magnitude = 1.0;
 
-  // Store in circular buffer
-  window_ax[buffer_idx] = ax;
-  window_ay[buffer_idx] = ay;
-  window_az[buffer_idx] = az;
-  buffer_idx = (buffer_idx + 1) % WINDOW_SIZE;
+  if (sampleTick) {
+    lastSampleTime = now;
 
-  bool sosPressed = (digitalRead(SOS_BUTTON_PIN) == LOW);
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+
+    // Convert m/s^2 -> g, then take the magnitude of the 3-axis vector
+    float ax = a.acceleration.x / 9.81;
+    float ay = a.acceleration.y / 9.81;
+    float az = a.acceleration.z / 9.81;
+    magnitude = sqrt(ax * ax + ay * ay + az * az);
+
+    // Store in circular buffer
+    window_ax[buffer_idx] = ax;
+    window_ay[buffer_idx] = ay;
+    window_az[buffer_idx] = az;
+    buffer_idx = (buffer_idx + 1) % WINDOW_SIZE;
+  }
 
   switch (state) {
 
     case NORMAL:
       digitalWrite(GREEN_LED_PIN, HIGH);
-      digitalWrite(RED_LED_PIN, LOW);
-      noTone(BUZZER_PIN);
+      setBuzzer(0);
+      // Red LED lights while a valid SOS hold is in progress (visual feedback)
+      digitalWrite(RED_LED_PIN,
+                   (btnStable && !holdHandled && btnPressStart >= ignoreButtonUntil) ? HIGH : LOW);
 
-      if (magnitude < FREE_FALL_G) {
+      if (sampleTick && magnitude < FREE_FALL_G) {
         state = FREE_FALL;
         freeFallTime = millis();
+        digitalWrite(RED_LED_PIN, LOW);
         Serial.println("[STATE] Free-fall signature detected, watching for impact...");
-      }
-      if (sosPressed) {
+      } else if (manualSosRequested()) {
         triggerAlert("Manual SOS button pressed");
       }
       break;
 
     case FREE_FALL:
-      if (magnitude > IMPACT_G) {
-        Serial.println("[STATE] Impact detected right after free-fall -> possible fall!");
-        state = IMPACT_PENDING_CONFIRM;
-        alertPendingTime = millis();
-        // Tier 2 ML: Stream the buffered window to the cloud for confirmation
-        publishWindowData();
-      } else if (millis() - freeFallTime > FALL_WINDOW_MS) {
-        state = NORMAL; // no impact followed -> false alarm, ignore
+      if (sampleTick) {
+        if (magnitude > IMPACT_G) {
+          Serial.println("[STATE] Impact detected right after free-fall -> possible fall!");
+          state = IMPACT_PENDING_CONFIRM;
+          alertPendingTime = millis();
+          // Tier 2 ML: Stream the buffered window to the cloud for confirmation
+          publishWindowData();
+        } else if (millis() - freeFallTime > FALL_WINDOW_MS) {
+          state = NORMAL; // no impact followed -> false alarm, ignore
+        }
       }
-      if (sosPressed) {
+      if (state == FREE_FALL && manualSosRequested()) {
         triggerAlert("Manual SOS button pressed");
       }
       break;
 
-    case IMPACT_PENDING_CONFIRM:
-      // Grace period: flash red LED + gentle beep, user can cancel with SOS button
-      digitalWrite(RED_LED_PIN, (millis() / 200) % 2);
-      tone(BUZZER_PIN, 1000);
+    case IMPACT_PENDING_CONFIRM: {
+      // Grace period: FAST BEEPING + flashing red LED. CLICK the button to cancel.
+      bool on = ((millis() / 250) % 2) == 0;
+      digitalWrite(RED_LED_PIN, on ? HIGH : LOW);
+      setBuzzer(on ? 1000 : 0);
 
-      if (sosPressed) {
+      if (buttonClicked()) {
         Serial.println("[STATE] User cancelled the alert - they're OK.");
         state = NORMAL;
-        noTone(BUZZER_PIN);
+        setBuzzer(0);
+        digitalWrite(RED_LED_PIN, LOW);
+        lockButton();
       } else if (millis() - alertPendingTime > CONFIRM_WINDOW_MS) {
         triggerAlert("Fall confirmed - no response from wearer");
       }
       break;
+    }
 
     case ALERT_ACTIVE:
+      // Alert already sent: SOLID LOUD TONE. CLICK the button to acknowledge and silence.
       digitalWrite(RED_LED_PIN, HIGH);
-      tone(BUZZER_PIN, 2000);
-      if (sosPressed) {
+      setBuzzer(2000);
+
+      if (buttonClicked()) {
         Serial.println("[STATE] Alert acknowledged. Resetting to normal.");
         state = NORMAL;
-        noTone(BUZZER_PIN);
+        setBuzzer(0);
+        digitalWrite(RED_LED_PIN, LOW);
+        lockButton();
       }
       break;
   }
 
-  delay(100); // ~10 Hz sampling, plenty for fall detection
+  delay(10);
+}
+
+// ---------------- Button Helpers ----------------
+
+// Reads the button and updates the debounced state. Call once per loop.
+void updateButton() {
+  unsigned long now = millis();
+  bool raw = (digitalRead(SOS_BUTTON_PIN) == LOW);
+
+  if (raw != btnRaw) {            // reading changed -> restart the stability timer
+    btnRaw = raw;
+    btnRawChangedAt = now;
+  }
+
+  pressEvent = false;
+  if (raw != btnStable && (now - btnRawChangedAt) >= DEBOUNCE_MS) {
+    btnStable = raw;              // reading has been stable long enough -> accept it
+    if (btnStable) {
+      pressEvent = true;          // a brand-new press
+      btnPressStart = now;
+      holdHandled = false;
+    }
+  }
+}
+
+// True once per press, but only when the button is not locked out.
+// Used to cancel (grace period) and to acknowledge (active alert).
+bool buttonClicked() {
+  return pressEvent && millis() >= ignoreButtonUntil;
+}
+
+// True once when the button has been held for SOS_HOLD_MS (manual SOS).
+// The press must have started after any lockout, and fires only once per press.
+bool manualSosRequested() {
+  if (!btnStable || holdHandled) return false;
+  if (btnPressStart < ignoreButtonUntil) return false;
+  if (millis() - btnPressStart < SOS_HOLD_MS) return false;
+  holdHandled = true;
+  return true;
+}
+
+// Ignore the button for a short time and mark the current press as used.
+void lockButton() {
+  ignoreButtonUntil = millis() + BUTTON_LOCKOUT_MS;
+  holdHandled = true;
+}
+
+// ---------------- Buzzer Helper ----------------
+// Only talks to the tone driver when the requested sound actually changes.
+void setBuzzer(int freq) {
+  if (freq == buzzerFreq) return;
+  buzzerFreq = freq;
+  if (freq > 0) {
+    tone(BUZZER_PIN, freq);
+  } else {
+    noTone(BUZZER_PIN);
+  }
 }
 
 // ---------------- Helper Functions ----------------
 void triggerAlert(const char* reason) {
   state = ALERT_ACTIVE;
+  lockButton();   // the press/bounce that caused this must not instantly acknowledge it
   Serial.print("[ALERT] ");
   Serial.println(reason);
   publishAlert(reason);
@@ -236,19 +346,19 @@ void publishAlert(const char* reason) {
 void publishWindowData() {
   if (!mqtt.connected()) connectMQTT();
   Serial.println("[MQTT] Publishing sensor window to ML service...");
-  
+
   // Construct JSON array string manually to save memory
   String payload = "{\"device\":\"" + String(DEVICE_ID) + "\",\"window\":[";
   for (int i = 0; i < WINDOW_SIZE; i++) {
     // Read from oldest to newest in circular buffer
     int idx = (buffer_idx + i) % WINDOW_SIZE;
-    payload += "[" + String(window_ax[idx], 2) + "," + 
-                     String(window_ay[idx], 2) + "," + 
+    payload += "[" + String(window_ax[idx], 2) + "," +
+                     String(window_ay[idx], 2) + "," +
                      String(window_az[idx], 2) + "]";
     if (i < WINDOW_SIZE - 1) payload += ",";
   }
   payload += "]}";
-  
+
   mqtt.publish(MQTT_TOPIC_DATA, payload.c_str());
   Serial.println("[MQTT] Window data sent.");
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import mqtt from 'mqtt';
-import { Activity, AlertTriangle, ShieldCheck, Database, Server } from 'lucide-react';
+import { Activity, AlertTriangle, ShieldCheck, Database } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const MQTT_BROKER = "wss://broker.hivemq.com:8884/mqtt";
@@ -22,7 +22,6 @@ function NavBar({ connected }) {
         <span className="micro" style={{ color: 'var(--ink-mute)' }}>
           {connected ? 'Connected to HiveMQ' : 'Disconnected'}
         </span>
-        <button className="button-primary-green ml-4" style={{ marginLeft: '16px' }}>Dashboard</button>
       </div>
     </nav>
   );
@@ -105,7 +104,7 @@ function AlertFeed({ alerts }) {
                   </span>
                 </td>
                 <td style={{ color: 'var(--ink-mute)' }}>{alert.reason}</td>
-                <td><button className="button-secondary-outline" style={{ padding: '4px 12px', fontSize: '12px' }}>Acknowledge</button></td>
+                <td>Received</td>
               </tr>
             ))}
           </tbody>
@@ -167,12 +166,6 @@ function App() {
             <p className="body-lg" style={{ color: 'var(--ink-mute)' }}>
               Real-time visualization of sensor streams and Tier-2 AI classifications.
             </p>
-          </div>
-          <div className="flex gap-4">
-            <button className="button-secondary-outline flex items-center gap-2">
-              <Server size={16} /> View Logs
-            </button>
-            <button className="button-primary-green">Export Report</button>
           </div>
         </div>
 
