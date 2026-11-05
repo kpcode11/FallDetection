@@ -96,23 +96,29 @@ class WhatsAppNotifier:
         self.twilio_sid = cfg.get("TWILIO_ACCOUNT_SID", "").strip()
         self.twilio_token = cfg.get("TWILIO_AUTH_TOKEN", "").strip()
         self.twilio_from = cfg.get("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886").strip()
-        self.twilio_to = [
-            item.strip()
-            for item in cfg.get("CAREGIVER_WHATSAPP_TO", "").split(",")
-            if item.strip()
-        ]
+        self.twilio_to = list(
+            dict.fromkeys(
+                item.strip()
+                for item in cfg.get("CAREGIVER_WHATSAPP_TO", "").split(",")
+                if item.strip()
+            )
+        )
 
         # Meta WhatsApp Cloud API settings
         self.meta_token = cfg.get("META_ACCESS_TOKEN", "").strip()
         self.meta_phone_id = cfg.get("META_PHONE_NUMBER_ID", "").strip()
-        self.meta_to = [
-            item.strip().lstrip("+")
-            for item in cfg.get("CAREGIVER_WHATSAPP_TO", "").split(",")
-            if item.strip()
-        ]
+        self.meta_to = list(
+            dict.fromkeys(
+                item.strip().lstrip("+")
+                for item in cfg.get("CAREGIVER_WHATSAPP_TO", "").split(",")
+                if item.strip()
+            )
+        )
 
         self._opener = http_opener or urllib.request.urlopen
         self._time_fn = time_fn
+        self._use_file_cooldown = env is None and http_opener is None
+        self._cooldown_file = MODULE_DIR / ".whatsapp_cooldown.json"
         self._last_sent_by_device: dict[str, float] = {}
         self._lock = threading.Lock()
 
@@ -132,9 +138,27 @@ class WhatsAppNotifier:
         now = self._time_fn()
         with self._lock:
             last_time = self._last_sent_by_device.get(device_id)
+            if self._use_file_cooldown and self._cooldown_file.is_file():
+                try:
+                    disk_data = json.loads(self._cooldown_file.read_text(encoding="utf-8"))
+                    disk_last = float(disk_data.get(device_id, 0.0))
+                    if last_time is None or disk_last > last_time:
+                        last_time = disk_last
+                except (OSError, ValueError, TypeError):
+                    pass
+
             if last_time is not None and (now - last_time) < self.cooldown_seconds:
                 return False
+
             self._last_sent_by_device[device_id] = now
+            if self._use_file_cooldown:
+                try:
+                    self._cooldown_file.write_text(
+                        json.dumps(self._last_sent_by_device),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
             return True
 
     def send_alert(

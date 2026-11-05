@@ -189,6 +189,20 @@ class WhatsAppAlertTests(unittest.TestCase):
         )
         self.assertTrue(manual_ok)
 
+    def test_real_model_confirms_end_of_buffer_hardware_fall_window(self):
+        if not server.MODEL_FILE.is_file():
+            self.skipTest("Trained model file not present")
+        real_model, _ = server.load_model_bundle()
+        w_fall = np.zeros((train.WINDOW_SIZE, 3))
+        w_fall[:, 2] = 1.0
+        w_fall[28] = [0.05, 0.05, 0.1]
+        w_fall[29] = [0.0, 0.0, 2.2]
+        self.assertTrue(server.classify_sensor_window(w_fall, real_model))
+
+        w_normal = np.zeros((train.WINDOW_SIZE, 3))
+        w_normal[:, 2] = 1.0
+        self.assertFalse(server.classify_sensor_window(w_normal, real_model))
+
 
 if __name__ == "__main__":
     unittest.main()

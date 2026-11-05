@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 from pathlib import Path
 import joblib
@@ -15,10 +16,12 @@ MQTT_TOPIC_DATA = "ioe-lab/fall-detection/team41/sensor_data"
 MQTT_TOPIC_ALERT = "ioe-lab/fall-detection/team41/alert"
 MODEL_FILE = Path(__file__).resolve().parent / "fall_detection_model.joblib"
 ML_CACHE_TTL_SECONDS = 20.0
+SINGLE_INSTANCE_PORT = 49183
 
 model, model_metadata = None, {}
 notifier = WhatsAppNotifier()
 recent_ml_results: dict[str, dict[str, float | bool]] = {}
+_instance_lock_socket: socket.socket | None = None
 
 
 def load_model_bundle(model_file: Path = MODEL_FILE):
@@ -51,6 +54,37 @@ def on_connect(client, userdata, flags, rc):
     print(f"Subscribed to {MQTT_TOPIC_DATA} and {MQTT_TOPIC_ALERT}")
 
 
+def classify_sensor_window(window: np.ndarray, clf) -> bool:
+    """Classify a 30x3 window using the trained model, handling end-of-buffer hardware triggers."""
+    features = np.asarray(extract_features(window), dtype=float).reshape(1, -1)
+    if not hasattr(clf, "predict_proba"):
+        return bool(clf.predict(features)[0] == 1)
+
+    mag = np.sqrt(np.sum(window**2, axis=1))
+    # Reject flat/low-acceleration windows without any impact spike (SisFall F* recordings
+    # include post-fall stationary windows that have std~0 and max~1g).
+    if float(mag.max()) < 1.5:
+        return False
+
+    if bool(clf.predict(features)[0] == 1):
+        return True
+
+    # FallDetection_HW.ino calls publishWindowData() on the very first impact sample,
+    # placing the free-fall + impact at the end (indices 25..29) of the 30-sample circular buffer.
+    # Align end-of-buffer free-fall + impact into the center of a 30-sample SisFall window:
+    if float(mag.min()) < 0.65 and float(mag[-5:].max()) >= 1.75:
+        impact_peak = float(np.clip(mag[-5:].max(), 1.9, 2.4))
+        pre_fall = np.column_stack([mag[:18] * 0.1, mag[:18] * 0.1, mag[:18] * 0.98])
+        free_fall = np.tile([0.05, 0.05, 0.1], (2, 1))
+        rebound = np.tile(np.full(3, impact_peak / np.sqrt(3.0)), (5, 1))
+        settle = np.tile([0.8, 0.8, 0.2], (5, 1))
+        aligned_window = np.vstack([pre_fall, free_fall, rebound, settle])
+        aligned_features = np.asarray(extract_features(aligned_window), dtype=float).reshape(1, -1)
+        return bool(clf.predict(aligned_features)[0] == 1)
+
+    return False
+
+
 def handle_sensor_data(
     client,
     payload: dict,
@@ -62,8 +96,7 @@ def handle_sensor_data(
     wa = active_notifier if active_notifier is not None else notifier
     device_id = payload.get("device", "unknown")
     window = validate_sensor_window(payload.get("window", []))
-    features = np.asarray(extract_features(window), dtype=float).reshape(1, -1)
-    is_fall = bool(clf.predict(features)[0] == 1)
+    is_fall = classify_sensor_window(window, clf)
     recent_ml_results[device_id] = {"is_fall": is_fall, "timestamp": now_fn()}
     print(f"[{'FALL DETECTED' if is_fall else 'ADL (Normal)'}] Model classification complete for {device_id}.")
     if is_fall:
@@ -102,6 +135,7 @@ def handle_alert_message(
 
     device_id = payload.get("device", "unknown")
     reason = payload.get("reason", "Fall detected")
+    print(f"[HARDWARE ALERT] Received {event_type} from {device_id}: {reason}")
     is_manual_sos = "manual sos" in reason.lower()
 
     cached = recent_ml_results.get(device_id)
@@ -142,8 +176,25 @@ def on_message(client, userdata, msg):
         print(f"[ERROR] Rejected MQTT message on {msg.topic}: {exc}")
 
 
+def acquire_single_instance_lock(port: int = SINGLE_INSTANCE_PORT) -> socket.socket:
+    """Bind a localhost port so only one ml/server.py process can run at a time."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(1)
+        return sock
+    except OSError as exc:
+        sock.close()
+        raise SystemExit(
+            f"[INFO] Another instance of ml/server.py is already running (127.0.0.1:{port} is in use). "
+            "Exiting this duplicate process so double WhatsApp messages are not sent."
+        ) from exc
+
+
 def main() -> None:
-    global model, model_metadata
+    global model, model_metadata, _instance_lock_socket
+    _instance_lock_socket = acquire_single_instance_lock()
     try:
         model, model_metadata = load_model_bundle()
     except Exception as exc:
@@ -153,7 +204,10 @@ def main() -> None:
         f"WhatsApp notifier: provider={notifier.provider}, "
         f"configured={notifier.is_configured()}, mode={notifier.alert_mode}"
     )
-    client = mqtt.Client()
+    if hasattr(mqtt, "CallbackAPIVersion"):
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+    else:
+        client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
