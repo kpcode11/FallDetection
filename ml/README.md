@@ -55,6 +55,23 @@ bare sklearn models can still load. MQTT payloads must contain exactly 30
 numeric `[ax, ay, az]` samples. Invalid payloads are rejected without
 publishing alerts. MQTT topics and the `ML_CONFIRMED_FALL` event are unchanged.
 
+## WhatsApp alert integration
+
+`server.py` also subscribes to `ioe-lab/fall-detection/team41/alert` and uses
+`whatsapp_notifier.py` to send WhatsApp notifications to caregivers when an
+uncancelled `FALL_ALERT` arrives (either after the 8-second grace period or on
+a manual SOS button hold), enriched with the latest Random Forest ML
+classification result.
+
+1. Copy `ml/.env.example` to `ml/.env`.
+2. Set `WHATSAPP_PROVIDER` (`callmebot`, `twilio`, or `meta`) and fill in your
+   phone number and API credentials.
+3. Test your WhatsApp configuration directly from the CLI:
+
+```bash
+python ml/whatsapp_notifier.py --device wearable-01 --reason "Test fall alert"
+```
+
 ## Report limit
 
 SisFall uses a waist-mounted device and performed falls. Its offline LOSO

@@ -10,7 +10,7 @@
 
 **Problem:** Elderly people living alone are at high risk after a fall — the danger is often the delay before anyone finds out, not just the fall itself.
 
-**Solution:** A wrist/pendant-worn ESP32 + accelerometer detects the physical signature of a fall (free-fall dip → impact spike → inactivity), gives the wearer a grace period to cancel a false alarm, confirms the event two ways (on-device threshold logic + a cloud-side ML classifier), and pushes a live alert to a caregiver-facing dashboard.
+**Solution:** A USB-powered ESP32 + accelerometer prototype node detects the physical signature of a fall (free-fall dip → impact spike), gives the user an 8-second grace period to cancel a false alarm, confirms the event two ways (on-device threshold logic + a cloud-side ML classifier), and pushes a live alert to both a caregiver-facing web dashboard and WhatsApp.
 
 ---
 
@@ -18,15 +18,14 @@
 
 | Component | Role |
 |---|---|
-| ESP32 Dev Board | Main processor — sensor reading, detection logic, WiFi, MQTT publish |
+| ESP32 Dev Board (USB-powered) | Main processor — sensor reading, detection logic, WiFi, MQTT publish |
 | MPU6050 (I2C: SDA=21, SCL=22) | Accelerometer + gyroscope — motion data source |
 | Buzzer (GPIO25) | Audible alarm during grace period / confirmed fall |
 | Red LED (GPIO27) | Fall-alert visual indicator |
 | Green LED (GPIO26) | System health / WiFi status indicator |
 | Pushbutton — SOS/Cancel (GPIO4) | Cancel false alarm during grace period, or manual panic trigger |
-| Li-ion battery + charging module | *(pending)* — makes the device untethered/wearable |
 
-Deliberately minimal sensor set (no GPS/GSM) to keep the core build low-cost while still demonstrating the full IoE loop.
+Deliberately minimal, non-wearable breadboard/test-fixture sensor set powered directly over 5V USB (no Li-ion batteries, charging modules, or GPS/GSM) to keep the hardware safe, simple, and low-cost while demonstrating the complete IoE loop.
 
 ---
 
@@ -144,9 +143,10 @@ copy and are intentionally gitignored.
 - [ ] Simulate falls safely (drop sensor onto a cushion — never test on a person) and confirm the full chain: detect → grace period → MQTT alert → ML confirmation → dashboard update
 - [ ] Measure and document time from fall event to dashboard alert appearing
 
-### Phase 4 — Wearable packaging
-- [ ] Add Li-ion battery + charging module (e.g. TP4056) for untethered operation
-- [ ] Build/print a small wrist or pendant enclosure for the demo
+### Phase 4 — WhatsApp Caregiver Alert Integration
+- [x] Add `ml/whatsapp_notifier.py` supporting CallMeBot, Twilio WhatsApp, and Meta Cloud API without modifying `.ino` firmware
+- [x] Coordinate `sensor_data` ML predictions with post-grace-period `FALL_ALERT` events in `ml/server.py` so cancelled false alarms do not trigger WhatsApp messages
+- [x] Configure `ml/.env` (from `ml/.env.example`) for live caregiver WhatsApp delivery
 
 ### Phase 5 — Documentation & evaluation
 - [ ] Write up the algorithm explanation (threshold + ML) with actual confusion matrix results from Phase 1

@@ -1,5 +1,7 @@
 .claude/
 .venv/
+.env
+ml/.env
 ml/tests/__pycache__/
 
 # Local SisFall source data and generated ML outputs
