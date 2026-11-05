@@ -86,12 +86,11 @@ Buy these parts for the first breadboard demonstration:
 | Male-to-male Dupont jumper wires | 1 bundle | Buy at least 40 wires, preferably 65 or 120 assorted pieces |
 | Male-to-female Dupont wires | 1 small bundle | Buy 10-20 in case the sensor or buzzer has female sockets |
 | Female-to-female Dupont wires | 1 small bundle | Optional, useful for modules with male pins |
-| USB data cable | 1 | Match the ESP32 connector: micro-USB or USB-C; ensure it supports data |
-| USB power bank | 1 optional | Easiest safe battery-style power source for a later demo |
+| USB data cable | 1 | Match the ESP32 connector: micro-USB or USB-C; supplies 5V power and serial data |
 
 Buy one spare ESP32, MPU6050, button, and buzzer only if the budget allows. LEDs and resistors are inexpensive, so buying an assortment avoids delays.
 
-Do not buy a bare lithium cell for the first build. A USB power bank is safer and simpler for the later standalone demonstration.
+This project uses a non-wearable breadboard/test-rig setup powered directly via USB. Do not include lithium-ion batteries or charging modules (such as TP4056).
 
 ### Breadboard wiring procedure
 
@@ -132,11 +131,9 @@ The final wiring table is:
 7. Confirm the red LED and buzzer behavior.
 8. Test motion only after the basic button test works.
 
-### Later battery operation
+### Power Supply (No Batteries)
 
-For the first battery-style demonstration, use a USB power bank connected through the ESP32 USB port. This avoids exposing the board to an unknown lithium-cell voltage.
-
-Never connect a raw 3.7 V lithium battery directly to the ESP32 `3V3` pin. A raw cell needs a suitable charger, protection circuit, switch, and regulated power converter. If using a battery module later, use a regulated 5 V output into the ESP32 USB/`VIN` input and verify its polarity before connecting it.
+The hardware prototype is designed as a stationary/breadboard test unit powered continuously over its 5 V USB port (connected to a laptop or standard USB wall adapter). Lithium-ion batteries, charging modules, and wearable enclosures are intentionally excluded from the project scope.
 
 ---
 

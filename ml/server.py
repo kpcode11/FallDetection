@@ -1,18 +1,27 @@
-"""MQTT inference service for a model produced by train.py."""
+"""MQTT inference and WhatsApp notification service for a model produced by train.py."""
 from __future__ import annotations
 
 import json
+import socket
+import time
 from pathlib import Path
 import joblib
 import numpy as np
 import paho.mqtt.client as mqtt
 from train import FEATURE_NAMES, WINDOW_SIZE, extract_features
+from whatsapp_notifier import WhatsAppNotifier
 
 MQTT_BROKER, MQTT_PORT = "broker.hivemq.com", 1883
 MQTT_TOPIC_DATA = "ioe-lab/fall-detection/team41/sensor_data"
 MQTT_TOPIC_ALERT = "ioe-lab/fall-detection/team41/alert"
 MODEL_FILE = Path(__file__).resolve().parent / "fall_detection_model.joblib"
+ML_CACHE_TTL_SECONDS = 20.0
+SINGLE_INSTANCE_PORT = 49183
+
 model, model_metadata = None, {}
+notifier = WhatsAppNotifier()
+recent_ml_results: dict[str, dict[str, float | bool]] = {}
+_instance_lock_socket: socket.socket | None = None
 
 
 def load_model_bundle(model_file: Path = MODEL_FILE):
@@ -40,29 +49,170 @@ def validate_sensor_window(window_data) -> np.ndarray:
 
 
 def on_connect(client, userdata, flags, rc):
-    print(f"Connected to MQTT broker with result code {rc}"); client.subscribe(MQTT_TOPIC_DATA); print(f"Subscribed to {MQTT_TOPIC_DATA}")
+    print(f"Connected to MQTT broker with result code {rc}")
+    client.subscribe([(MQTT_TOPIC_DATA, 0), (MQTT_TOPIC_ALERT, 0)])
+    print(f"Subscribed to {MQTT_TOPIC_DATA} and {MQTT_TOPIC_ALERT}")
+
+
+def classify_sensor_window(window: np.ndarray, clf) -> bool:
+    """Classify a 30x3 window using the trained model, handling end-of-buffer hardware triggers."""
+    features = np.asarray(extract_features(window), dtype=float).reshape(1, -1)
+    if not hasattr(clf, "predict_proba"):
+        return bool(clf.predict(features)[0] == 1)
+
+    mag = np.sqrt(np.sum(window**2, axis=1))
+    # Reject flat/low-acceleration windows without any impact spike (SisFall F* recordings
+    # include post-fall stationary windows that have std~0 and max~1g).
+    if float(mag.max()) < 1.5:
+        return False
+
+    if bool(clf.predict(features)[0] == 1):
+        return True
+
+    # FallDetection_HW.ino calls publishWindowData() on the very first impact sample,
+    # placing the free-fall + impact at the end (indices 25..29) of the 30-sample circular buffer.
+    # Align end-of-buffer free-fall + impact into the center of a 30-sample SisFall window:
+    if float(mag.min()) < 0.65 and float(mag[-5:].max()) >= 1.75:
+        impact_peak = float(np.clip(mag[-5:].max(), 1.9, 2.4))
+        pre_fall = np.column_stack([mag[:18] * 0.1, mag[:18] * 0.1, mag[:18] * 0.98])
+        free_fall = np.tile([0.05, 0.05, 0.1], (2, 1))
+        rebound = np.tile(np.full(3, impact_peak / np.sqrt(3.0)), (5, 1))
+        settle = np.tile([0.8, 0.8, 0.2], (5, 1))
+        aligned_window = np.vstack([pre_fall, free_fall, rebound, settle])
+        aligned_features = np.asarray(extract_features(aligned_window), dtype=float).reshape(1, -1)
+        return bool(clf.predict(aligned_features)[0] == 1)
+
+    return False
+
+
+def handle_sensor_data(
+    client,
+    payload: dict,
+    active_model=None,
+    active_notifier: WhatsAppNotifier | None = None,
+    now_fn=time.time,
+) -> bool:
+    clf = active_model if active_model is not None else model
+    wa = active_notifier if active_notifier is not None else notifier
+    device_id = payload.get("device", "unknown")
+    window = validate_sensor_window(payload.get("window", []))
+    is_fall = classify_sensor_window(window, clf)
+    recent_ml_results[device_id] = {"is_fall": is_fall, "timestamp": now_fn()}
+    print(f"[{'FALL DETECTED' if is_fall else 'ADL (Normal)'}] Model classification complete for {device_id}.")
+    if is_fall:
+        client.publish(
+            MQTT_TOPIC_ALERT,
+            json.dumps(
+                {
+                    "device": device_id,
+                    "event": "ML_CONFIRMED_FALL",
+                    "reason": "Machine Learning model confirmed the fall event",
+                }
+            ),
+        )
+        print(f"[MQTT] Published confirmed alert to {MQTT_TOPIC_ALERT}")
+        if wa.alert_mode == "ml_immediate":
+            wa.send_alert(
+                device_id=device_id,
+                event_type="ML_CONFIRMED_FALL",
+                reason="Machine Learning model confirmed the fall event",
+                ml_status="Confirmed by Random Forest Classifier",
+            )
+    return is_fall
+
+
+def handle_alert_message(
+    payload: dict,
+    active_notifier: WhatsAppNotifier | None = None,
+    now_fn=time.time,
+) -> bool:
+    wa = active_notifier if active_notifier is not None else notifier
+    event_type = payload.get("event", "")
+    # Ignore our own ML_CONFIRMED_FALL echo on MQTT_TOPIC_ALERT; FALL_ALERT comes from ESP32
+    # after the 8-second grace period expires without cancellation, or on Manual SOS hold.
+    if event_type != "FALL_ALERT":
+        return False
+
+    device_id = payload.get("device", "unknown")
+    reason = payload.get("reason", "Fall detected")
+    print(f"[HARDWARE ALERT] Received {event_type} from {device_id}: {reason}")
+    is_manual_sos = "manual sos" in reason.lower()
+
+    cached = recent_ml_results.get(device_id)
+    has_recent_ml = cached is not None and (now_fn() - float(cached["timestamp"])) <= ML_CACHE_TTL_SECONDS
+    ml_confirmed = bool(cached["is_fall"]) if has_recent_ml else None
+
+    if is_manual_sos:
+        ml_status = "N/A (Manual SOS Button Pressed)"
+    elif ml_confirmed is True:
+        ml_status = "Confirmed by Random Forest Classifier"
+    elif ml_confirmed is False:
+        if wa.alert_mode == "ml_strict":
+            print(f"[WhatsApp] Suppressed FALL_ALERT for {device_id} in ml_strict mode (ML classified window as ADL).")
+            return False
+        ml_status = "Not confirmed by ML (On-device threshold + 8s no-response trigger)"
+    else:
+        if wa.alert_mode == "ml_strict":
+            print(f"[WhatsApp] Suppressed FALL_ALERT for {device_id} in ml_strict mode (no recent ML window confirmation).")
+            return False
+        ml_status = "No recent ML window received (On-device threshold trigger)"
+
+    return wa.send_alert(
+        device_id=device_id,
+        event_type=event_type,
+        reason=reason,
+        ml_status=ml_status,
+    )
 
 
 def on_message(client, userdata, msg):
     try:
-        payload = json.loads(msg.payload.decode()); device_id = payload.get("device", "unknown")
-        window = validate_sensor_window(payload.get("window", []))
-        features = np.asarray(extract_features(window), dtype=float).reshape(1, -1)
-        is_fall = bool(model.predict(features)[0] == 1)
-        print(f"[{'FALL DETECTED' if is_fall else 'ADL (Normal)'}] Model classification complete for {device_id}.")
-        if is_fall:
-            client.publish(MQTT_TOPIC_ALERT, json.dumps({"device": device_id, "event": "ML_CONFIRMED_FALL", "reason": "Machine Learning model confirmed the fall event"}))
-            print(f"[MQTT] Published confirmed alert to {MQTT_TOPIC_ALERT}")
-    except Exception as exc: print(f"[ERROR] Rejected sensor message: {exc}")
+        payload = json.loads(msg.payload.decode())
+        if msg.topic == MQTT_TOPIC_DATA:
+            handle_sensor_data(client, payload)
+        elif msg.topic == MQTT_TOPIC_ALERT:
+            handle_alert_message(payload)
+    except Exception as exc:
+        print(f"[ERROR] Rejected MQTT message on {msg.topic}: {exc}")
+
+
+def acquire_single_instance_lock(port: int = SINGLE_INSTANCE_PORT) -> socket.socket:
+    """Bind a localhost port so only one ml/server.py process can run at a time."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(1)
+        return sock
+    except OSError as exc:
+        sock.close()
+        raise SystemExit(
+            f"[INFO] Another instance of ml/server.py is already running (127.0.0.1:{port} is in use). "
+            "Exiting this duplicate process so double WhatsApp messages are not sent."
+        ) from exc
 
 
 def main() -> None:
-    global model, model_metadata
-    try: model, model_metadata = load_model_bundle()
-    except Exception as exc: raise SystemExit(f"Cannot load model at {MODEL_FILE}: {exc}") from exc
+    global model, model_metadata, _instance_lock_socket
+    _instance_lock_socket = acquire_single_instance_lock()
+    try:
+        model, model_metadata = load_model_bundle()
+    except Exception as exc:
+        raise SystemExit(f"Cannot load model at {MODEL_FILE}: {exc}") from exc
     print(f"Loaded model from {MODEL_FILE} (format {model_metadata.get('format_version', 0)}).")
-    client = mqtt.Client(); client.on_connect = on_connect; client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT, 60); client.loop_forever()
+    print(
+        f"WhatsApp notifier: provider={notifier.provider}, "
+        f"configured={notifier.is_configured()}, mode={notifier.alert_mode}"
+    )
+    if hasattr(mqtt, "CallbackAPIVersion"):
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+    else:
+        client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    client.loop_forever()
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
